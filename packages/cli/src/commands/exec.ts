@@ -34,6 +34,7 @@ export async function runExec(
 ): Promise<void> {
   const config = loadConfig(cwd)
   const skipPerms = opts.yolo ? ' --dangerously-skip-permissions' : ''
+  const autoStart = opts.yolo ? ' "."' : ''
 
   // Build list of { role, model } to show
   let targets: Array<{ role: string; model: string }>
@@ -71,12 +72,13 @@ export async function runExec(
   console.log(chalk.bold('  Open each in a separate terminal:\n'))
   for (const { role, model } of targets) {
     const dir = `agents/${role}`
-    console.log(`  ${chalk.cyan(role.padEnd(18))}  ${chalk.dim('$')} cd ${dir} && claude --model ${model}${skipPerms}`)
+    const start = role === 'orchestrator' ? '' : autoStart
+    console.log(`  ${chalk.cyan(role.padEnd(18))}  ${chalk.dim('$')} cd ${dir} && claude --model ${model}${skipPerms}${start}`)
   }
   console.log('')
 
   if (opts.launch) {
-    await launchAll(targets, cwd, skipPerms)
+    await launchAll(targets, cwd, skipPerms, autoStart)
   } else {
     console.log(chalk.dim('  Tip: add --launch to open terminals automatically (best-effort)'))
   }
@@ -86,6 +88,7 @@ async function launchAll(
   targets: Array<{ role: string; model: string }>,
   cwd: string,
   skipPerms: string,
+  autoStart: string,
 ): Promise<void> {
   console.log(chalk.bold('  Launching terminals...\n'))
   for (const { role, model } of targets) {
@@ -94,7 +97,8 @@ async function launchAll(
       console.log(chalk.dim(`  skip  ${role} (directory not found)`))
       continue
     }
-    const launched = tryLaunch(agentDir, model, skipPerms)
+    const start = role === 'orchestrator' ? '' : autoStart
+    const launched = tryLaunch(agentDir, model, skipPerms, start)
     if (launched) {
       console.log(chalk.green('  ✔') + `  ${role}`)
     } else {
@@ -103,8 +107,8 @@ async function launchAll(
   }
 }
 
-function tryLaunch(agentDir: string, model: string, skipPerms: string): boolean {
-  const claudeCmd = `claude --model ${model}${skipPerms}`
+function tryLaunch(agentDir: string, model: string, skipPerms: string, autoStart: string): boolean {
+  const claudeCmd = `claude --model ${model}${skipPerms}${autoStart}`
   try {
     if (process.platform === 'win32') {
       // Try Windows Terminal first, fall back to cmd

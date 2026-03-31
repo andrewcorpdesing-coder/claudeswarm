@@ -28,6 +28,32 @@ Hive Mind es un broker MCP local que conecta varios agentes Claude Code entre s�
 
 ---
 
+## Por qué usar Hive Mind
+
+### Mejor calidad de código — el reviewer realmente funciona
+
+Un solo agente que implementa y luego "revisa" su propio código es el mismo modelo con el mismo sesgo. El reviewer de Hive Mind es una instancia separada que llega al código sin saber cómo fue construido — igual que un code review real. Detecta cosas distintas porque no cargó la historia de implementación.
+
+### Contexto enfocado — menos degradación en proyectos largos
+
+Un agente único que trabaja en un proyecto grande acumula contexto de todo: frontend, backend, tests, errores pasados, caminos descartados. La calidad baja conforme el contexto crece. Con agentes especializados, cada uno carga solo lo que necesita. El coder-backend no sabe nada de CSS. El reviewer no sabe cómo se implementó la función. Eso mantiene la calidad estable.
+
+### Paralelismo real en trabajo delimitado
+
+Mientras coder-backend implementa la API, coder-frontend ya construye los componentes. El broker gestiona las dependencias — frontend no empieza hasta que backend pasa QA, pero si son independientes corren al mismo tiempo. Para proyectos con partes bien separadas, el tiempo total se reduce.
+
+### Para quién tiene sentido
+
+| Escenario | Vale la pena |
+|---|---|
+| Proyecto con backend y frontend desacoplados | Sí |
+| Quieres QA obligatorio en cada tarea | Sí |
+| Feature grande con subtareas independientes | Sí |
+| Script pequeño o tarea de 10 minutos | No — un solo agente es más rápido |
+| Todo depende de todo secuencialmente | No — el paralelismo no ayuda |
+
+---
+
 ## Prerequisitos
 
 - **Node.js 22+** (usa `node:sqlite` built-in)

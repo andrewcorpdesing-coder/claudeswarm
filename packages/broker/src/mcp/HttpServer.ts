@@ -60,6 +60,7 @@ export interface HttpServerOptions {
   agentRegistry: AgentRegistry
   port: number
   blackboardDir?: string   // defaults to '.hive'
+  projectRoot?: string     // absolute path to project root (defaults to cwd)
 }
 
 export class HttpServer {
@@ -85,6 +86,10 @@ export class HttpServer {
     this.blackboard = new Blackboard(opts.blackboardDir)
     this.auditLedger = new AuditLedger(opts.db)
     this.port = opts.port
+
+    // Seed project root so agents know where to write files
+    const projectRoot = opts.projectRoot ?? process.cwd()
+    this.blackboard.seed('project.meta', { root: projectRoot })
 
     // Release file locks when an agent goes offline (disconnect or stale heartbeat)
     this.agentRegistry.setOnOfflineCallback((agentId) => {

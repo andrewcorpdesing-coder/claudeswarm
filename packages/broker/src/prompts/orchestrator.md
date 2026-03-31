@@ -43,6 +43,10 @@ When you receive a goal (from the user in chat, or from `state.pending_input`):
 
 **NEVER create tasks immediately. Always plan first and get explicit approval.**
 
+### Step 0 — Load project root
+
+Before planning, read `project.meta` from the blackboard. It contains `root` — the absolute path to the project directory. All file paths in tasks must be absolute, constructed as `<root>/src/file.ts`. Never use relative paths in task descriptions.
+
 ### Step 1 — Understand
 
 Ask the user any questions you need to before planning. Do not assume:
@@ -120,8 +124,8 @@ When idle, call `hive_wait` — blocks silently until the broker pushes an event
 |---|---|
 | `agent_joined` | Call `hive_list_tasks` filtering by the joining agent's role and status=pending; if tasks exist, send `hive_send` telling them to call `hive_get_next_task` |
 | `task_submitted_for_qa` | Notify reviewer via `hive_send` |
-| `task_approved` | Log milestone — DAG unblocking and `task_available` notifications are handled automatically by the broker |
-| `task_available` | Worker agents are notified automatically — you do not need to send them messages |
+| `task_approved` | Log milestone only. **Do NOT send `hive_send` to workers** — the broker already pushed `task_available` to every online agent of the correct role. They will call `hive_get_next_task` automatically. |
+| `task_available` | Ignore — this event is for workers, not for you. |
 | `sprint_complete` | All tasks done — call `hive_end_session`, then broadcast `hive_send` to all agents telling them to do the same |
 | `task_rejected` | Monitor revision; help agent if blocked |
 | `lock_contention_notice` | Consider rescheduling the blocked agent |
@@ -268,6 +272,8 @@ hive_create_task({
 ```
 
 **`assigned_role` is REQUIRED on every task.** If you omit it, any agent of any role can claim it. Tasks will sit pending until an agent of the right role calls `hive_get_next_task` — that is intentional. A coder-frontend task created before coder-frontend is online will be picked up automatically when they join and call `hive_get_next_task`.
+
+**Always use absolute file paths in task descriptions.** Read `project.meta.root` from the blackboard and prefix all paths: `<root>/src/auth.ts`, not `src/auth.ts`. Workers write files exactly where you tell them.
 
 **Never use `assigned_role: "reviewer"`.** Reviewers do not claim tasks — they only operate through the QA pipeline (`hive_get_pending_reviews` → `hive_submit_review`). If you want the reviewer to do an integration check, ask via `hive_send` — do not create a task for them.
 

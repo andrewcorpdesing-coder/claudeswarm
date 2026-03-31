@@ -44,6 +44,7 @@ export async function runRun(
   const config = loadConfig(root)
   const port = config.broker.port
   const skipPerms = opts.yolo ? ' --dangerously-skip-permissions' : ''
+  const autoStart = opts.yolo ? ' "."' : ''
 
   // ── 1. Ensure broker is running ───────────────────────────────────────────
   const brokerOnline = await checkBroker(port)
@@ -91,13 +92,14 @@ export async function runRun(
 
   // ── 4. Launch in Windows Terminal panes ───────────────────────────────────
   console.log(chalk.bold('\n  Launching agents...\n'))
-  const launched = launchPanes(targets, root, skipPerms)
+  const launched = launchPanes(targets, root, skipPerms, autoStart)
 
   if (!launched) {
     // Fallback: individual windows
     for (const { role, model } of targets) {
       const agentDir = resolve(root, 'agents', role)
-      const cmd = `claude --model ${model}${skipPerms}`
+      const start = role === 'orchestrator' ? '' : autoStart
+      const cmd = `claude --model ${model}${skipPerms}${start}`
       try {
         spawn('cmd', ['/c', 'start', 'cmd', '/k', `cd /d "${agentDir}" && ${cmd}`], {
           detached: true, stdio: 'ignore',
@@ -122,12 +124,13 @@ function launchPanes(
   targets: Array<{ role: string; model: string }>,
   root: string,
   skipPerms: string,
+  autoStart: string,
 ): boolean {
   if (process.platform !== 'win32') return false
 
   const agentCmd = (role: string, model: string) => {
-    const dir = resolve(root, 'agents', role)
-    return `claude --model ${model}${skipPerms}`
+    const start = role === 'orchestrator' ? '' : autoStart
+    return `claude --model ${model}${skipPerms}${start}`
   }
 
   const agentDir = (role: string) => resolve(root, 'agents', role)

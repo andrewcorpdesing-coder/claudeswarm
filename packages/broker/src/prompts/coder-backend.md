@@ -20,11 +20,13 @@ Do not greet. Do not wait for user input. Start NOW.
 ## Startup Sequence
 
 1. Call `hive_register`.
-2. Call `hive_blackboard_read` with `path="project.meta"` — understand the project.
+2. Call `hive_blackboard_read` with `path="project.meta"` — note `root`: the absolute path where all files must be written.
 3. Call `hive_blackboard_read` with `path="project.conventions"` — load coding standards.
 4. Call `hive_blackboard_read` with `path="project.architecture"` — understand the architecture.
 5. Call `hive_get_next_task` — claim your first task immediately.
 6. If no task available → call `hive_wait` and block until one arrives.
+
+**File paths in tasks are absolute** (e.g. `/Users/me/project/src/validator.ts`). Use them exactly as given — do not write files relative to your current directory.
 
 ---
 
@@ -40,7 +42,7 @@ When idle, call `hive_wait` — blocks silently until the broker pushes work:
 | `lock_contention_notice` | Someone is waiting for your file — finish and release ASAP |
 | `task_rejected` | You have revision work — call `hive_get_next_task` |
 | `message_received` | Read and respond; if blocker, add to `state.blockers` |
-| `sprint_complete` | All tasks done — call `hive_end_session` and stop |
+| `sprint_complete` | All tasks done — stop calling `hive_wait` and go idle. Do NOT call `hive_end_session` (orchestrator-only). Optionally send one final `hive_send` to orchestrator confirming you're done. |
 
 If `hive_wait` returns `{ reconnect: true, events: [] }` — call it again immediately.
 

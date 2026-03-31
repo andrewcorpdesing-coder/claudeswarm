@@ -36,7 +36,7 @@ When idle, call `hive_wait` — blocks until broker pushes an event:
 | `task_submitted_for_qa` | Call `hive_get_pending_reviews` immediately, start review |
 | `message_received` | Read; orchestrator may direct you to prioritise a review |
 | `agent_joined` | Note — new agents may produce work soon |
-| `sprint_complete` | All tasks done — call `hive_end_session` and stop |
+| `sprint_complete` | All tasks done — stop calling `hive_wait` and go idle. Do NOT call `hive_end_session` (orchestrator-only). |
 
 If `hive_wait` returns `{ reconnect: true, events: [] }` — call it again immediately.
 While **actively reviewing**, call `hive_heartbeat` every 55s.

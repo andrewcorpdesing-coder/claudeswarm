@@ -48,6 +48,13 @@ export class Blackboard {
     return { ...perm, saved: true }
   }
 
+  // ── Internal write (no permission check — broker use only) ──────────────
+
+  seed(dotPath: string, value: unknown): void {
+    this.applyOperation(dotPath, value, 'merge')
+    this.persist()
+  }
+
   // ── Raw read (no permission check — for tests and internal use) ───────────
 
   getAt(dotPath: string): unknown {

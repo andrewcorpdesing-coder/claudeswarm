@@ -23,10 +23,21 @@ const DEFAULTS: HiveConfig = {
   models: { ...ROLE_MODEL_DEFAULTS },
 }
 
+/** Walk up from cwd until we find .hive/hive.config.json (like git). */
+export function findProjectRoot(cwd: string = process.cwd()): string | null {
+  let dir = cwd
+  while (true) {
+    if (existsSync(join(dir, '.hive', 'hive.config.json'))) return dir
+    const parent = join(dir, '..')
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
 export function loadConfig(cwd: string = process.cwd()): HiveConfig {
-  const configPath = join(cwd, '.hive', 'hive.config.json')
-  if (!existsSync(configPath)) return DEFAULTS
-  const raw = readFileSync(configPath, 'utf8')
+  const root = findProjectRoot(cwd)
+  if (!root) return DEFAULTS
+  const raw = readFileSync(join(root, '.hive', 'hive.config.json'), 'utf8')
   const parsed = JSON.parse(raw) as Partial<HiveConfig>
   return {
     ...DEFAULTS,

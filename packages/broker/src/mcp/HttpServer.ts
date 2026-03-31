@@ -288,6 +288,56 @@ export class HttpServer {
         return this.adminJson(res, 200, this.blackboard.snapshot())
       }
 
+      // ── GET /admin/plan ───────────────────────────────────────────────────
+      if (req.method === 'GET' && resource === 'plan' && !resourceId) {
+        const plan = this.blackboard.getAt('state.current_plan')
+        return this.adminJson(res, 200, { plan: plan ?? null })
+      }
+
+      // ── POST /admin/plan/approve ──────────────────────────────────────────
+      if (req.method === 'POST' && resource === 'plan' && resourceId === 'approve') {
+        const orchestrators = this.agentRegistry.getOnline()
+          .filter((a: { role: string }) => a.role === 'orchestrator')
+        for (const orch of orchestrators) {
+          this.eventQueue.push(orch.id, 'plan_approved', { approved_at: new Date().toISOString() })
+        }
+        return this.adminJson(res, 200, { ok: true, orchestrators_notified: orchestrators.length })
+      }
+
+      // ── POST /admin/plan/reject ───────────────────────────────────────────
+      if (req.method === 'POST' && resource === 'plan' && resourceId === 'reject') {
+        const body = await this.readBody(req)
+        const { feedback } = JSON.parse(body || '{}') as { feedback?: string }
+        const orchestrators = this.agentRegistry.getOnline()
+          .filter((a: { role: string }) => a.role === 'orchestrator')
+        for (const orch of orchestrators) {
+          this.eventQueue.push(orch.id, 'plan_rejected', { feedback: feedback ?? '', rejected_at: new Date().toISOString() })
+        }
+        return this.adminJson(res, 200, { ok: true, orchestrators_notified: orchestrators.length })
+      }
+
+      // ── POST /admin/input ─────────────────────────────────────────────────
+      // Queues a task description for the orchestrator to pick up via hive_wait
+      if (req.method === 'POST' && resource === 'input' && !resourceId) {
+        const body = await this.readBody(req)
+        const { message } = JSON.parse(body) as { message: string }
+        if (!message?.trim()) {
+          return this.adminJson(res, 400, { error: 'message is required' })
+        }
+        this.blackboard.write('system', 'orchestrator', 'state.pending_input', message.trim(), 'set')
+        // Push event to any online orchestrator
+        const orchestrators = this.agentRegistry.getOnline()
+          .filter((a: { role: string }) => a.role === 'orchestrator')
+        for (const orch of orchestrators) {
+          this.eventQueue.push(orch.id, 'new_input', { message: message.trim() })
+        }
+        return this.adminJson(res, 200, {
+          ok: true,
+          queued: true,
+          orchestrators_notified: orchestrators.length,
+        })
+      }
+
       // ── GET /admin/audit ──────────────────────────────────────────────────
       if (req.method === 'GET' && resource === 'audit') {
         const rows = this.auditLedger.query({
@@ -452,7 +502,7 @@ export class HttpServer {
     registerBlackboardWriteTool(server, this.agentRegistry, this.blackboard, this.auditLedger)
     registerAuditLogTool(server, this.agentRegistry, this.auditLedger)
     registerGetPendingReviewsTool(server, this.agentRegistry, this.taskStore)
-    registerSubmitReviewTool(server, this.agentRegistry, this.taskStore, this.messageBus, this.auditLedger)
+    registerSubmitReviewTool(server, this.agentRegistry, this.taskStore, this.messageBus, this.eventQueue, this.auditLedger)
     registerEndSessionTool(server, this.agentRegistry, this.blackboard)
     registerMergeBranchTool(server, this.agentRegistry, this.auditLedger)
   }

@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { AgentRegistry } from '../agents/AgentRegistry.js'
 import type { TaskStore } from '../agents/TaskStore.js'
 import type { MessageBus } from '../mcp/MessageBus.js'
+import type { EventQueue } from '../mcp/EventQueue.js'
 import type { AuditLedger } from '../audit/AuditLedger.js'
 import { toolOk, toolErr } from '../mcp/toolHelpers.js'
 
@@ -25,6 +26,7 @@ export function registerSubmitReviewTool(
   agentRegistry: AgentRegistry,
   taskStore: TaskStore,
   messageBus: MessageBus,
+  eventQueue: EventQueue,
   auditLedger?: AuditLedger,
 ): void {
   ;(server as unknown as { tool: (...a: unknown[]) => void }).tool(
@@ -108,6 +110,34 @@ export function registerSubmitReviewTool(
           }
 
           console.log(`[qa] Approved: ${task.id} by ${params.reviewer_id}`)
+
+          // Notify agents whose tasks just became unblocked
+          const unblocked = taskStore.getNewlyUnblockedTasks(params.task_id)
+          for (const dep of unblocked) {
+            const role = dep.assignedRole
+            if (!role) continue
+            const targets = agentRegistry.getOnline().filter(a => a.role === role)
+            for (const agent of targets) {
+              eventQueue.push(agent.id, 'task_available', {
+                taskId: dep.id,
+                title: dep.title,
+                role,
+                message: 'A task you can work on is now unblocked. Call hive_get_next_task.',
+              })
+            }
+            console.log(`[qa] task_available pushed for role=${role} (task ${dep.id} unblocked)`)
+          }
+
+          // If all tasks are done, push sprint_complete to all agents
+          if (taskStore.allCompleted()) {
+            const allAgents = agentRegistry.getOnline()
+            for (const agent of allAgents) {
+              eventQueue.push(agent.id, 'sprint_complete', {
+                message: 'All tasks are completed. Call hive_end_session to finish.',
+              })
+            }
+            console.log('[qa] sprint_complete pushed to all agents')
+          }
 
           return toolOk({
             taskId: updated.id,

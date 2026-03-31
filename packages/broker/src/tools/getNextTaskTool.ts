@@ -34,6 +34,9 @@ export function registerGetNextTaskTool(
         if (agent.role === 'orchestrator') {
           return toolErr('Orchestrators do not claim tasks — they create and assign them', 'FORBIDDEN')
         }
+        if (agent.role === 'reviewer') {
+          return toolErr('Reviewers do not claim tasks — use hive_get_pending_reviews and hive_submit_review', 'FORBIDDEN')
+        }
 
         // Check for revision tasks first (agent's own rejected work takes priority)
         const revisionTask = taskStore.getRevisionTask(params.agent_id)

@@ -7,6 +7,9 @@ import { runStatus, runAgents, runTasks } from './commands/status.js'
 import { runPrompt, runScaffold } from './commands/prompt.js'
 import { runExec } from './commands/exec.js'
 import { runCleanup } from './commands/cleanup.js'
+import { runRun } from './commands/run.js'
+import { runTask } from './commands/task.js'
+import { runPlan, runApprove, runReject } from './commands/plan.js'
 
 const program = new Command()
 
@@ -78,8 +81,9 @@ program
 program
   .command('scaffold')
   .description('Create agents/ directory with CLAUDE.md stubs for each role')
-  .action(async () => {
-    await runScaffold()
+  .option('--force', 'Overwrite existing CLAUDE.md files (re-embed latest prompts)')
+  .action(async (opts: { force?: boolean }) => {
+    await runScaffold(process.cwd(), opts)
   })
 
 // ── hive exec ──────────────────────────────────────────────────────────────
@@ -87,14 +91,72 @@ program
   .command('exec [roles...]')
   .description('Print commands (or launch terminals) to start agent sessions')
   .option('--launch', 'Attempt to open a new terminal window for each role (best-effort)')
+  .option('--yolo', 'Add --dangerously-skip-permissions to each claude command')
   .addHelpText('after', `
 Examples:
   hive exec                                   # show all 7 roles
   hive exec orchestrator coder-backend        # show only these roles
   hive exec orchestrator:opus coder-backend:sonnet  # override model per role
-  hive exec --launch orchestrator coder-backend reviewer  # open terminals`)
-  .action(async (roles: string[], opts: { launch?: boolean }) => {
+  hive exec --launch orchestrator coder-backend reviewer  # open terminals
+  hive exec --launch --yolo orchestrator coder-backend reviewer  # skip permission prompts`)
+  .action(async (roles: string[], opts: { launch?: boolean; yolo?: boolean }) => {
     await runExec(roles, opts)
+  })
+
+// ── hive run ───────────────────────────────────────────────────────────────
+program
+  .command('run [task]')
+  .description('Start broker (if needed), queue a task, and launch all agents in one command')
+  .option('--roles <roles...>', 'Roles to launch (default: orchestrator coder-backend coder-frontend reviewer)')
+  .option('--yolo', 'Add --dangerously-skip-permissions to each claude command')
+  .addHelpText('after', `
+Examples:
+  hive run                                         # launch default 4 agents, no task
+  hive run "implementa autenticación JWT"           # queue task + launch agents
+  hive run --yolo "agrega endpoint DELETE /users"  # skip permission prompts
+  hive run --roles orchestrator coder-backend "implementa la API"`)
+  .action(async (task: string | undefined, opts: { roles?: string[]; yolo?: boolean }) => {
+    await runRun(task, opts.roles ?? [], opts)
+  })
+
+// ── hive task ──────────────────────────────────────────────────────────────
+program
+  .command('task <description>')
+  .description('Queue a task for the running orchestrator without restarting agents')
+  .action(async (description: string) => {
+    await runTask(description)
+  })
+
+// ── hive plan ──────────────────────────────────────────────────────────────
+program
+  .command('plan')
+  .description('Show the orchestrator\'s current plan (draft or approved)')
+  .action(async () => { await runPlan() })
+
+// ── hive approve ───────────────────────────────────────────────────────────
+program
+  .command('approve')
+  .description('Approve the current plan — orchestrator will start creating tasks')
+  .action(async () => { await runApprove() })
+
+// ── hive reject ────────────────────────────────────────────────────────────
+program
+  .command('reject <feedback>')
+  .description('Reject the current plan with feedback — orchestrator will revise it')
+  .action(async (feedback: string) => { await runReject(feedback) })
+
+// ── hive restart ───────────────────────────────────────────────────────────
+program
+  .command('restart')
+  .description('Stop the broker, clean state, and start fresh')
+  .option('--keep-blackboard', 'Preserve the blackboard (only reset DB)')
+  .action(async (opts: { keepBlackboard?: boolean }) => {
+    const { runStop } = await import('./commands/stop.js')
+    const { runCleanup } = await import('./commands/cleanup.js')
+    const { runStart } = await import('./commands/start.js')
+    await runStop()
+    runCleanup({ db: true, blackboard: !opts.keepBlackboard })
+    await runStart()
   })
 
 // ── hive cleanup ───────────────────────────────────────────────────────────

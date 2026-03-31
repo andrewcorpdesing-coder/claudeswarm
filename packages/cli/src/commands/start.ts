@@ -4,7 +4,7 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import chalk from 'chalk'
-import { loadConfig } from '../config.js'
+import { loadConfig, findProjectRoot } from '../config.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -25,14 +25,14 @@ function findBrokerEntry(): string {
 const BROKER_ENTRY = findBrokerEntry()
 
 export async function runStart(cwd: string = process.cwd()): Promise<void> {
-  const pidFile = join(cwd, '.hive', 'broker.pid')
-  const logFile = join(cwd, '.hive', 'broker.log')
-  const hiveDir = join(cwd, '.hive')
-
-  if (!existsSync(join(hiveDir, 'hive.config.json'))) {
+  const root = findProjectRoot(cwd)
+  if (!root) {
     console.error(chalk.red('✖') + '  No .hive/hive.config.json found. Run ' + chalk.cyan('hive init') + ' first.')
     process.exit(1)
   }
+  const pidFile = join(root, '.hive', 'broker.pid')
+  const logFile = join(root, '.hive', 'broker.log')
+  cwd = root
 
   // Check if already running
   if (existsSync(pidFile)) {

@@ -104,7 +104,7 @@ function ensureGitBranch(cwd: string, branch: string): 'created' | 'exists' | 'e
   }
 }
 
-export async function runScaffold(cwd: string = process.cwd()): Promise<void> {
+export async function runScaffold(cwd: string = process.cwd(), opts: { force?: boolean } = {}): Promise<void> {
   const config = loadConfig(cwd)
   const port = config.broker?.port ?? 7432
   const brokerUrl = `http://localhost:${port}`
@@ -136,7 +136,8 @@ export async function runScaffold(cwd: string = process.cwd()): Promise<void> {
 
     // ── CLAUDE.md ────────────────────────────────────────────────────────
     const claudeMd = join(agentDir, 'CLAUDE.md')
-    if (!existsSync(claudeMd)) {
+    const claudeExists = existsSync(claudeMd)
+    if (!claudeExists || opts.force) {
       let content: string
       if (loader) {
         content = (loader as { load: (role: string, vars: object) => string }).load(role as never, {
@@ -156,9 +157,10 @@ export async function runScaffold(cwd: string = process.cwd()): Promise<void> {
         ].join('\n')
       }
       writeFileSync(claudeMd, content, 'utf8')
-      console.log(chalk.green('✔') + `  Created agents/${role}/CLAUDE.md${loader ? '' : ' (stub)'}`)
+      const action = claudeExists ? 'Updated' : 'Created'
+      console.log(chalk.green('✔') + `  ${action} agents/${role}/CLAUDE.md${loader ? '' : ' (stub)'}`)
     } else {
-      console.log(chalk.dim(`  skip  agents/${role}/CLAUDE.md (already exists)`))
+      console.log(chalk.dim(`  skip  agents/${role}/CLAUDE.md (already exists — use --force to overwrite)`))
     }
 
     // ── .mcp.json ─────────────────────────────────────────────────────────

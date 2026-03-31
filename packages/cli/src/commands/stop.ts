@@ -1,9 +1,11 @@
 import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import chalk from 'chalk'
+import { findProjectRoot } from '../config.js'
 
 export async function runStop(cwd: string = process.cwd()): Promise<void> {
-  const pidFile = join(cwd, '.hive', 'broker.pid')
+  const root = findProjectRoot(cwd)
+  const pidFile = join(root ?? cwd, '.hive', 'broker.pid')
 
   if (!existsSync(pidFile)) {
     console.log(chalk.yellow('⚠') + '  Broker is not running (no .hive/broker.pid found).')

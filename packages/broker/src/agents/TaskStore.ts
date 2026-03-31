@@ -342,6 +342,36 @@ export class TaskStore {
     return rows.map(r => this.rowToRecord(r))
   }
 
+  /**
+   * Returns tasks that were blocked on completedTaskId and are now fully unblocked.
+   * A task is unblocked when all its dependencies are 'completed'.
+   */
+  getNewlyUnblockedTasks(completedTaskId: string): TaskRecord[] {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT t.* FROM tasks t
+      JOIN task_dependencies td ON td.task_id = t.id
+      WHERE td.depends_on_id = ?
+        AND t.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_dependencies td2
+          JOIN tasks dep ON td2.depends_on_id = dep.id
+          WHERE td2.task_id = t.id
+            AND dep.status != 'completed'
+        )
+    `).all(completedTaskId) as unknown as TaskRow[]
+    return rows.map(r => this.rowToRecord(r))
+  }
+
+  /** Returns true when every task in the store is completed (or there are none). */
+  allCompleted(): boolean {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) as total,
+             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as done
+      FROM tasks
+    `).get() as { total: number; done: number }
+    return row.total > 0 && row.total === row.done
+  }
+
   private getDependencies(taskId: string): string[] {
     const rows = this.db.prepare(
       'SELECT depends_on_id FROM task_dependencies WHERE task_id = ?',

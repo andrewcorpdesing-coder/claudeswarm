@@ -29,10 +29,11 @@ function parseRoleSpec(spec: string): { role: string; modelOverride: string | nu
 
 export async function runExec(
   roleSpecs: string[],
-  opts: { launch?: boolean },
+  opts: { launch?: boolean; yolo?: boolean },
   cwd: string = process.cwd(),
 ): Promise<void> {
   const config = loadConfig(cwd)
+  const skipPerms = opts.yolo ? ' --dangerously-skip-permissions' : ''
 
   // Build list of { role, model } to show
   let targets: Array<{ role: string; model: string }>
@@ -70,12 +71,12 @@ export async function runExec(
   console.log(chalk.bold('  Open each in a separate terminal:\n'))
   for (const { role, model } of targets) {
     const dir = `agents/${role}`
-    console.log(`  ${chalk.cyan(role.padEnd(18))}  ${chalk.dim('$')} cd ${dir} && claude --model ${model}`)
+    console.log(`  ${chalk.cyan(role.padEnd(18))}  ${chalk.dim('$')} cd ${dir} && claude --model ${model}${skipPerms}`)
   }
   console.log('')
 
   if (opts.launch) {
-    await launchAll(targets, cwd)
+    await launchAll(targets, cwd, skipPerms)
   } else {
     console.log(chalk.dim('  Tip: add --launch to open terminals automatically (best-effort)'))
   }
@@ -84,6 +85,7 @@ export async function runExec(
 async function launchAll(
   targets: Array<{ role: string; model: string }>,
   cwd: string,
+  skipPerms: string,
 ): Promise<void> {
   console.log(chalk.bold('  Launching terminals...\n'))
   for (const { role, model } of targets) {
@@ -92,7 +94,7 @@ async function launchAll(
       console.log(chalk.dim(`  skip  ${role} (directory not found)`))
       continue
     }
-    const launched = tryLaunch(agentDir, model)
+    const launched = tryLaunch(agentDir, model, skipPerms)
     if (launched) {
       console.log(chalk.green('  ✔') + `  ${role}`)
     } else {
@@ -101,10 +103,16 @@ async function launchAll(
   }
 }
 
-function tryLaunch(agentDir: string, model: string): boolean {
-  const claudeCmd = `claude --model ${model}`
+function tryLaunch(agentDir: string, model: string, skipPerms: string): boolean {
+  const claudeCmd = `claude --model ${model}${skipPerms}`
   try {
     if (process.platform === 'win32') {
+      // Try Windows Terminal first, fall back to cmd
+      try {
+        spawn('wt', ['new-tab', '--title', agentDir.split(/[\\/]/).pop() ?? 'agent',
+          '-d', agentDir, 'cmd', '/k', claudeCmd], { detached: true, stdio: 'ignore' }).unref()
+        return true
+      } catch { /* wt not available */ }
       spawn('cmd', ['/c', 'start', 'cmd', '/k', `cd /d "${agentDir}" && ${claudeCmd}`], {
         detached: true, stdio: 'ignore',
       }).unref()

@@ -2,6 +2,7 @@ import { resolve, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import chalk from 'chalk'
 import { loadConfig } from '../config.js'
@@ -67,6 +68,39 @@ export async function runPrompt(
   } else {
     // Print to stdout — ready to pipe or copy
     console.log(prompt)
+  }
+}
+
+function isGitRepo(cwd: string): boolean {
+  try {
+    execSync('git rev-parse --git-dir', { cwd, stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function currentGitBranch(cwd: string): string {
+  try {
+    return execSync('git rev-parse --abbrev-ref HEAD', { cwd }).toString().trim()
+  } catch {
+    return 'HEAD'
+  }
+}
+
+function ensureGitBranch(cwd: string, branch: string): 'created' | 'exists' | 'error' {
+  try {
+    // Check if branch already exists
+    execSync(`git show-ref --verify --quiet refs/heads/${branch}`, { cwd, stdio: 'ignore' })
+    return 'exists'
+  } catch {
+    // Branch doesn't exist — create it
+    try {
+      execSync(`git branch ${branch}`, { cwd, stdio: 'ignore' })
+      return 'created'
+    } catch {
+      return 'error'
+    }
   }
 }
 
@@ -165,6 +199,30 @@ export async function runScaffold(cwd: string = process.cwd()): Promise<void> {
       writeFileSync(hookScript, buildHeartbeatHook(port), 'utf8')
       console.log(chalk.green('✔') + `  Created agents/${role}/.claude/hooks/post-write-heartbeat.js`)
     }
+  }
+
+  // ── Git branch per agent (B1 lite) ──────────────────────────────────────
+  if (isGitRepo(cwd)) {
+    console.log('')
+    console.log('  Setting up git branches...')
+    let branchErrors = 0
+    for (const role of VALID_ROLES) {
+      const branch = `hive/${role}`
+      const result = ensureGitBranch(cwd, branch)
+      if (result === 'created') {
+        console.log(chalk.green('  ✔') + `  Created branch ${chalk.cyan(branch)}`)
+      } else if (result === 'exists') {
+        console.log(chalk.dim(`  skip  branch ${branch} (already exists)`))
+      } else {
+        console.log(chalk.yellow('  ⚠') + `  Could not create branch ${branch}`)
+        branchErrors++
+      }
+    }
+    if (branchErrors === 0) {
+      console.log(chalk.dim('       Agents commit to their hive/<role> branch; orchestrator merges after QA.'))
+    }
+  } else {
+    console.log(chalk.dim('\n  (Not a git repo — skipping branch creation)'))
   }
 
   console.log('')

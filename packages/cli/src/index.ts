@@ -6,6 +6,7 @@ import { runStop } from './commands/stop.js'
 import { runStatus, runAgents, runTasks } from './commands/status.js'
 import { runPrompt, runScaffold } from './commands/prompt.js'
 import { runExec } from './commands/exec.js'
+import { runCleanup } from './commands/cleanup.js'
 
 const program = new Command()
 
@@ -94,6 +95,18 @@ Examples:
   hive exec --launch orchestrator coder-backend reviewer  # open terminals`)
   .action(async (roles: string[], opts: { launch?: boolean }) => {
     await runExec(roles, opts)
+  })
+
+// ── hive cleanup ───────────────────────────────────────────────────────────
+program
+  .command('cleanup')
+  .description('Reset broker state: remove tasks.db and reset blackboard (broker must be stopped)')
+  .option('--db',         'Remove only .hive/tasks.db (tasks, agents, locks, audit)')
+  .option('--blackboard', 'Reset only .hive/blackboard.json to defaults')
+  .option('--branches',   'Delete all hive/* git branches')
+  .option('--all',        'Clean everything: db + blackboard + branches')
+  .action((opts: { db?: boolean; blackboard?: boolean; branches?: boolean; all?: boolean }) => {
+    runCleanup(opts)
   })
 
 program.parse()

@@ -53,6 +53,9 @@ While **actively working** on a task, call `hive_heartbeat` every 55s to keep fi
 7. Verify against acceptance_criteria:
    - Run tests → record output
    - Build verification evidence (test summary, curl output, etc.)
+7.5. If on your hive/<role> branch, commit your changes:
+   git add <files_modified>
+   git commit -m "hive[{{agent_id}}/<task_id>]: <one-line summary>"
 8. hive_release_locks          → release ALL file locks
 9. hive_complete_task          → submit with summary + files_modified + verification
 10. hive_get_next_task         → claim your next task
@@ -61,6 +64,8 @@ While **actively working** on a task, call `hive_heartbeat` every 55s to keep fi
 
 **Never call `hive_complete_task` before `hive_release_locks`.**
 **Never hold locks while waiting for events — release first, reacquire after.**
+
+**On git branches:** If the project uses `hive/<role>` branches (created by `hive scaffold`), commit your changes to `hive/{{agent_id}}` before step 8. If you're on `main` (no branch isolation), skip 7.5 — your changes are already in the working tree for the orchestrator to commit.
 
 ---
 

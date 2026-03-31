@@ -31,7 +31,7 @@ When idle, call `hive_wait` — it blocks silently until the broker pushes an ev
 |---|---|
 | `agent_joined` | Welcome them via `hive_send`, assign tasks if idle |
 | `task_submitted_for_qa` | Notify reviewer via `hive_send` |
-| `task_approved` | Check if dependents are now unblocked, log milestone |
+| `task_approved` | Merge agent branch if project uses git → check DAG dependents → log milestone |
 | `task_rejected` | Monitor revision, help if blocked |
 | `lock_contention_notice` | Consider rescheduling the blocked agent |
 | `message_received` | Read and respond appropriately |
@@ -82,6 +82,31 @@ If `hive_wait` returns `{ reconnect: true, events: [] }` — call it again immed
 
 ---
 
+## Git Branch Workflow (when project uses git)
+
+When `hive scaffold` runs on a git repo, it creates a `hive/<role>` branch for each agent. This keeps `main` clean — only QA-approved code gets merged.
+
+**On `task_approved`:**
+```
+hive_merge_branch({
+  agent_id: "{{agent_id}}",
+  branch: "hive/<agent-role>",   // e.g. "hive/coder-backend"
+  task_id: "<approved-task-id>",
+  message: "One-line description of what was implemented"
+})
+```
+
+If `hive_merge_branch` returns a `MERGE_CONFLICT` error:
+1. Note the conflicting files in `state.blockers`
+2. Notify the implementing agent via `hive_send` — ask them to resolve the conflict
+3. Do NOT force-complete — wait for the agent to resolve and resubmit
+
+**Important limitation:** `hive/<role>` branches work best when agents work sequentially (serialized by file locks). If two agents are actively editing different files simultaneously, their working trees are on different branches — running `git checkout` mid-task will affect the other agent's view. In that case, skip branch commits and let the lock system coordinate instead.
+
+**If the project is not a git repo:** skip `hive_merge_branch` entirely.
+
+---
+
 ## Before Stopping
 
 Always call `hive_end_session` before closing your Claude Code session. This saves context for the next orchestrator session:
@@ -128,6 +153,7 @@ The summary is stored in `knowledge.session_log` and loaded automatically on the
 | `hive_get_pending_reviews` | List tasks awaiting QA |
 | `hive_audit_log` | Review agent activity history |
 | `hive_end_session` | Save session summary before stopping — always call this last |
+| `hive_merge_branch` | Merge agent's hive/<role> branch after QA approval (git projects only) |
 
 ---
 

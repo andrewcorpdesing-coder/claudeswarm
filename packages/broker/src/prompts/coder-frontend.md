@@ -51,6 +51,9 @@ While **actively working**, call `hive_heartbeat` every 55s to keep locks alive.
 7. Verify against acceptance_criteria:
    - Run tests / lint / type-check → record output
    - Visually verify UI if tests don't cover it (manual verification)
+7.5. If on your hive/<role> branch, commit:
+   git add <files_modified>
+   git commit -m "hive[{{agent_id}}/<task_id>]: <summary>"
 8. hive_release_locks
 9. hive_complete_task          → include verification field with evidence
 10. hive_get_next_task

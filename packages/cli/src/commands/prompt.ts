@@ -1,6 +1,6 @@
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import chalk from 'chalk'
@@ -131,9 +131,95 @@ export async function runScaffold(cwd: string = process.cwd()): Promise<void> {
     const mcpJson = join(agentDir, '.mcp.json')
     writeFileSync(mcpJson, JSON.stringify(mcpConfig, null, 2) + '\n', 'utf8')
     console.log(chalk.green('✔') + `  Created agents/${role}/.mcp.json`)
+
+    // ── .hive-agent-id ────────────────────────────────────────────────────
+    const agentIdFile = join(agentDir, '.hive-agent-id')
+    if (!existsSync(agentIdFile)) {
+      writeFileSync(agentIdFile, `${role}-1\n`, 'utf8')
+      console.log(chalk.green('✔') + `  Created agents/${role}/.hive-agent-id`)
+    }
+
+    // ── .claude/settings.json + hook script ───────────────────────────────
+    const claudeDir = join(agentDir, '.claude')
+    const hooksDir = join(claudeDir, 'hooks')
+    mkdirSync(hooksDir, { recursive: true })
+
+    const settingsPath = join(claudeDir, 'settings.json')
+    if (!existsSync(settingsPath)) {
+      const settings = {
+        hooks: {
+          PostToolUse: [
+            {
+              matcher: 'Write|Edit|MultiEdit',
+              hooks: [{ type: 'command', command: 'node .claude/hooks/post-write-heartbeat.js' }],
+            },
+          ],
+        },
+      }
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8')
+      console.log(chalk.green('✔') + `  Created agents/${role}/.claude/settings.json`)
+    }
+
+    const hookScript = join(hooksDir, 'post-write-heartbeat.js')
+    if (!existsSync(hookScript)) {
+      writeFileSync(hookScript, buildHeartbeatHook(port), 'utf8')
+      console.log(chalk.green('✔') + `  Created agents/${role}/.claude/hooks/post-write-heartbeat.js`)
+    }
   }
 
   console.log('')
   console.log('  Start each agent by opening a Claude Code session in its agents/<role>/ directory.')
   console.log('  Each CLAUDE.md will be picked up automatically as the system prompt.')
+  console.log('  Auto-heartbeat hooks keep file locks alive on every Write/Edit call.')
+}
+
+function buildHeartbeatHook(port: number): string {
+  return `#!/usr/bin/env node
+// Hive Mind — auto-heartbeat hook
+// Fires after every Write/Edit/MultiEdit call to keep agent session and file locks alive.
+// This replaces the need to call hive_heartbeat manually every 55s while working.
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+
+// Consume stdin (Claude Code sends JSON tool data on stdin — must drain it)
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { raw += chunk; });
+process.stdin.on('end', fireHeartbeat);
+process.stdin.on('error', () => process.exit(0));
+
+function fireHeartbeat() {
+  try {
+    const agentIdFile = path.join(process.cwd(), '.hive-agent-id');
+    if (!fs.existsSync(agentIdFile)) { process.exit(0); return; }
+    const agentId = fs.readFileSync(agentIdFile, 'utf8').trim();
+    if (!agentId) { process.exit(0); return; }
+
+    let port = ${port};
+    try {
+      const cfgPath = path.join(process.cwd(), '../../.hive/hive.config.json');
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      port = cfg?.broker?.port ?? port;
+    } catch { /* use default */ }
+
+    const req = http.request({
+      hostname: 'localhost',
+      port: port,
+      path: '/admin/agents/' + encodeURIComponent(agentId) + '/heartbeat',
+      method: 'POST',
+      headers: { 'Content-Length': '0' },
+    }, (res) => {
+      res.resume();
+      process.exit(0);
+    });
+    req.on('error', () => process.exit(0));
+    req.setTimeout(1000, () => { req.destroy(); process.exit(0); });
+    req.end();
+  } catch {
+    process.exit(0);
+  }
+}
+`
 }

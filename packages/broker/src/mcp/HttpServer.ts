@@ -238,6 +238,16 @@ export class HttpServer {
         return this.adminJson(res, 200, { ok: true, agentId: resourceId, status: 'offline' })
       }
 
+      // ── POST /admin/agents/:id/heartbeat ──────────────────────────────────
+      // Called by PostToolUse hook scripts to keep agent + locks alive
+      if (req.method === 'POST' && resource === 'agents' && resourceId && action === 'heartbeat') {
+        const agent = this.agentRegistry.getById(resourceId)
+        if (!agent) return this.adminJson(res, 404, { error: `Agent not found: ${resourceId}` })
+        this.agentRegistry.heartbeat(resourceId)
+        this.fileLockRegistry.refreshHeartbeat(resourceId)
+        return this.adminJson(res, 200, { ok: true })
+      }
+
       // ── GET /admin/tasks ──────────────────────────────────────────────────
       if (req.method === 'GET' && resource === 'tasks' && !resourceId) {
         const statusFilter = url.searchParams.get('status')

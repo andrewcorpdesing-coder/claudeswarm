@@ -5,6 +5,7 @@ import { runStart } from './commands/start.js'
 import { runStop } from './commands/stop.js'
 import { runStatus, runAgents, runTasks } from './commands/status.js'
 import { runPrompt, runScaffold } from './commands/prompt.js'
+import { runExec } from './commands/exec.js'
 
 const program = new Command()
 
@@ -78,6 +79,21 @@ program
   .description('Create agents/ directory with CLAUDE.md stubs for each role')
   .action(async () => {
     await runScaffold()
+  })
+
+// ── hive exec ──────────────────────────────────────────────────────────────
+program
+  .command('exec [roles...]')
+  .description('Print commands (or launch terminals) to start agent sessions')
+  .option('--launch', 'Attempt to open a new terminal window for each role (best-effort)')
+  .addHelpText('after', `
+Examples:
+  hive exec                                   # show all 7 roles
+  hive exec orchestrator coder-backend        # show only these roles
+  hive exec orchestrator:opus coder-backend:sonnet  # override model per role
+  hive exec --launch orchestrator coder-backend reviewer  # open terminals`)
+  .action(async (roles: string[], opts: { launch?: boolean }) => {
+    await runExec(roles, opts)
   })
 
 program.parse()

@@ -2,9 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import chalk from 'chalk'
 
+import { ROLE_MODEL_DEFAULTS } from '../config.js'
+
 const DEFAULT_CONFIG = {
   project: 'my-project',
   broker: { port: 7432, transport: 'http' },
+  models: { ...ROLE_MODEL_DEFAULTS },
   agents: [],
   qa: { auto_lint: false, auto_test: false, ai_review: false, escalate_threshold: 'high' },
   audit: { deferred: true, trigger_on: ['milestone_complete', 'every_5_tasks'], log_level: 'inter_agent_messages' },

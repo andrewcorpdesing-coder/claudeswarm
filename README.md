@@ -32,7 +32,7 @@ HiveClaude es un broker MCP local que conecta varios agentes Claude Code entre s
 
 ### Mejor calidad de código — el reviewer realmente funciona
 
-Un solo agente que implementa y luego "revisa" su propio código es el mismo modelo con el mismo sesgo. El reviewer de Hive Mind es una instancia separada que llega al código sin saber cómo fue construido — igual que un code review real. Detecta cosas distintas porque no cargó la historia de implementación.
+Un solo agente que implementa y luego "revisa" su propio código es el mismo modelo con el mismo sesgo. El reviewer de HiveClaude es una instancia separada que llega al código sin saber cómo fue construido — igual que un code review real. Detecta cosas distintas porque no cargó la historia de implementación.
 
 ### Contexto enfocado — menos degradación en proyectos largos
 
@@ -136,7 +136,7 @@ presenta plan estructurado en su terminal:
        ↓
 espera aprobación (hive_wait)
        ↓
-  hive approve  ←── tú desde la CLI
+  hiveclaude approve  ←── tú desde la CLI
        ↓
 crea tareas y notifica a los workers
 ```
@@ -279,7 +279,7 @@ Claude Code lo detecta automáticamente al abrir ese directorio.
 | `lock_granted` | Worker en espera | El archivo solicitado está disponible |
 | `lock_contention_notice` | Worker que tiene el lock | Otro agente espera ese archivo |
 | `message_received` | Destinatario | Mensaje directo o broadcast |
-| `plan_approved` | Orchestrator | El usuario aprobó el plan vía `hive approve` |
+| `plan_approved` | Orchestrator | El usuario aprobó el plan vía `hiveclaude approve` |
 | `plan_rejected` | Orchestrator | El usuario rechazó el plan con feedback |
 | `new_input` | Orchestrator | Nueva tarea encolada vía `hiveclaude task` o `hiveclaude run` |
 
@@ -390,7 +390,7 @@ GET  /admin/blackboard                    — snapshot completo de la pizarra
 GET  /admin/audit[?agent_id=&action=&result=&since=&limit=]
 POST /admin/input                         — encolar tarea para el orquestador (usado por hiveclaude task / hiveclaude run)
 GET  /admin/plan                          — plan actual del orquestador
-POST /admin/plan/approve                  — aprobar plan (usado por hive approve)
+POST /admin/plan/approve                  — aprobar plan (usado por hiveclaude approve)
 POST /admin/plan/reject                   — rechazar plan con feedback (usado por hive reject)
 ```
 

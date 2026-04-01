@@ -1,18 +1,30 @@
 {
   "name": "hiveclaude",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Coordinate multiple Claude Code agents working in parallel on the same codebase",
-  "keywords": ["claude", "ai", "agents", "mcp", "multi-agent", "claude-code"],
+  "keywords": [
+    "claude",
+    "ai",
+    "agents",
+    "mcp",
+    "multi-agent",
+    "claude-code"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/andrewcorpdesing-coder/claudeswarm"
   },
-  "bin": { "hiveclaude": "dist/index.js" },
-  "files": ["dist"],
+  "bin": {
+    "hiveclaude": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc && node -e \"const{cpSync,mkdirSync}=require('fs');mkdirSync('dist/broker',{recursive:true});cpSync('../broker/dist','dist/broker',{recursive:true});\"",
+    "build": "tsc && node -e \"const{cpSync,mkdirSync,copyFileSync}=require('fs');mkdirSync('dist/broker',{recursive:true});cpSync('../broker/dist','dist/broker',{recursive:true});copyFileSync('../../README.md','README.md');\"",
     "test": "node --test dist/tests/**/*.test.js"
   },
   "dependencies": {

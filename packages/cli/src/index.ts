@@ -15,7 +15,7 @@ const program = new Command()
 
 program
   .name('hiveclaude')
-  .description('ClaudeSwarm — coordinador de agentes Claude Code')
+  .description('HiveClaude — coordinador de agentes Claude Code')
   .version('0.1.0')
 
 // ── hive init ──────────────────────────────────────────────────────────────

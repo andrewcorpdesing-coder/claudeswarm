@@ -54,6 +54,14 @@ Mientras coder-backend implementa la API, coder-frontend ya construye los compon
 
 ---
 
+## ⚠️ Aviso
+
+- **Alpha:** v0.1 — úsalo en proyectos de prueba, no en producción crítica aún
+- **Costo:** cada agente consume tokens de forma independiente — 4 agentes activos equivale a 4x el consumo normal de Claude Code
+- **Permisos:** el flag `--yolo` elimina las confirmaciones de Claude Code — revisa bien el plan antes de aprobarlo
+
+---
+
 ## Prerequisitos
 
 - **Node.js 22+** (usa `node:sqlite` built-in)

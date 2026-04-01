@@ -1,6 +1,6 @@
 {
   "name": "hiveclaude",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Coordinate multiple Claude Code agents working in parallel on the same codebase",
   "keywords": [

@@ -83,6 +83,15 @@ interface TaskRow {
   context: string | null
   qa_phase1_output: string | null
   qa_phase2_verdict: string | null
+  // v0.2 fields
+  task_type: string | null
+  decay_score: number
+  quality_floor: number
+  estimated_ms: number | null
+  // CPM fields
+  estimated_duration: number
+  float_minutes: number | null
+  is_critical_path: number
 }
 
 export interface TaskRecord {
@@ -108,6 +117,15 @@ export interface TaskRecord {
   lastUpdated: string
   context: Record<string, unknown> | null
   dependsOn: string[]
+  // v0.2 fields
+  taskType: string | null
+  decayScore: number
+  qualityFloor: number
+  estimatedMs: number | null
+  // CPM fields
+  estimatedDuration: number
+  floatMinutes: number | null
+  isCriticalPath: boolean
 }
 
 export class TaskStore {
@@ -116,8 +134,39 @@ export class TaskStore {
   constructor(db: Database) {
     this.db = db
     this.db.addSchema(TASK_SCHEMA)
-    // Migration: add verification column if upgrading from an older DB
+    // Migrations — additive only, safe to re-run
     try { this.db.exec('ALTER TABLE tasks ADD COLUMN verification TEXT') } catch { /* already exists */ }
+    try { this.db.exec("ALTER TABLE tasks ADD COLUMN task_type TEXT DEFAULT NULL") } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE tasks ADD COLUMN decay_score REAL DEFAULT 0.5') } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE tasks ADD COLUMN quality_floor REAL DEFAULT 0.0') } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE tasks ADD COLUMN estimated_ms INTEGER DEFAULT NULL') } catch { /* already exists */ }
+    try { this.db.exec('ALTER TABLE tasks ADD COLUMN estimated_duration INTEGER DEFAULT 60') } catch { }
+    try { this.db.exec('ALTER TABLE tasks ADD COLUMN float_minutes INTEGER') } catch { }
+    try { this.db.exec('ALTER TABLE tasks ADD COLUMN is_critical_path INTEGER DEFAULT 0') } catch { }
+    // agent_quality table for Thompson Sampling
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_quality (
+        agent_id   TEXT NOT NULL,
+        task_type  TEXT NOT NULL,
+        alpha      REAL NOT NULL DEFAULT 1.0,
+        beta       REAL NOT NULL DEFAULT 1.0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (agent_id, task_type)
+      )
+    `)
+    // task_completion_records for CriticalityEngine
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS task_completion_records (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id      TEXT NOT NULL,
+        agent_role   TEXT NOT NULL,
+        task_type    TEXT,
+        estimated_ms INTEGER,
+        actual_ms    INTEGER,
+        review_score REAL,
+        completed_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `)
   }
 
   create(params: {
@@ -131,6 +180,9 @@ export class TaskStore {
     acceptanceCriteria?: string
     dependsOn?: string[]
     context?: Record<string, unknown>
+    taskType?: string
+    estimatedMs?: number
+    estimatedDuration?: number  // minutos, default 60
   }): TaskRecord {
     const id = randomUUID()
     const now = new Date().toISOString()
@@ -146,14 +198,18 @@ export class TaskStore {
       this.db.prepare(`
         INSERT INTO tasks
           (id, title, description, status, priority, assigned_role, assigned_to,
-           milestone_id, acceptance_criteria, created_by, created_at, last_updated, context)
-        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           milestone_id, acceptance_criteria, created_by, created_at, last_updated, context,
+           task_type, estimated_ms, estimated_duration)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id, params.title, params.description, priority,
         params.assignedRole ?? null, params.assignedTo ?? null,
         params.milestoneId ?? null, params.acceptanceCriteria ?? null,
         params.createdBy, now, now,
         params.context ? JSON.stringify(params.context) : null,
+        params.taskType ?? null,
+        params.estimatedMs ?? null,
+        params.estimatedDuration ?? 60,
       )
 
       for (const depId of params.dependsOn ?? []) {
@@ -163,7 +219,9 @@ export class TaskStore {
       }
     })
 
-    return this.getById(id)!
+    const result = this.getById(id)!
+    this.computeCPM()
+    return result
   }
 
   /**
@@ -181,7 +239,10 @@ export class TaskStore {
           WHERE td.task_id = t.id
             AND dep.status != 'completed'
         )
-      ORDER BY t.priority ASC, t.created_at ASC
+      ORDER BY t.is_critical_path DESC,
+               COALESCE(t.float_minutes, 9999) ASC,
+               t.priority ASC,
+               t.created_at ASC
       LIMIT 1
     `).get(role) as TaskRow | undefined
 
@@ -278,7 +339,9 @@ export class TaskStore {
       UPDATE tasks SET status = 'completed', qa_phase2_verdict = ?, completed_at = ?, last_updated = ?
       WHERE id = ?
     `).run(verdict, now, now, params.taskId)
-    return this.getById(params.taskId)!
+    const result = this.getById(params.taskId)!
+    this.computeCPM()
+    return result
   }
 
   /**
@@ -379,6 +442,357 @@ export class TaskStore {
     return rows.map(r => r.depends_on_id)
   }
 
+  // ── v0.2 helpers ────────────────────────────────────────────────────────────
+
+  setDecayScore(taskId: string, score: number): void {
+    this.db.prepare('UPDATE tasks SET decay_score = ?, last_updated = ? WHERE id = ?')
+      .run(score, new Date().toISOString(), taskId)
+  }
+
+  setQualityFloor(taskId: string, floor: number): void {
+    this.db.prepare('UPDATE tasks SET quality_floor = ?, last_updated = ? WHERE id = ?')
+      .run(floor, new Date().toISOString(), taskId)
+  }
+
+  /** Top N pending tasks for a role ordered by decay_score DESC — for Thompson sampling */
+  getTopCandidates(role: string, limit = 5): TaskRecord[] {
+    const rows = this.db.prepare(`
+      SELECT t.* FROM tasks t
+      WHERE t.status = 'pending'
+        AND (t.assigned_role IS NULL OR t.assigned_role = ?)
+        AND NOT EXISTS (
+          SELECT 1 FROM task_dependencies td
+          JOIN tasks dep ON td.depends_on_id = dep.id
+          WHERE td.task_id = t.id AND dep.status != 'completed'
+        )
+      ORDER BY t.decay_score DESC, t.priority ASC, t.created_at ASC
+      LIMIT ?
+    `).all(role, limit) as unknown as TaskRow[]
+    return rows.map(r => this.rowToRecord(r))
+  }
+
+  /** Pending/in_progress tasks that declared any of the given files */
+  getPendingTasksWithFiles(filePaths: string[]): TaskRecord[] {
+    if (filePaths.length === 0) return []
+    const active = [
+      ...this.listByStatus('pending'),
+      ...this.listByStatus('in_progress'),
+      ...this.listByStatus('assigned'),
+    ]
+    const pathSet = new Set(filePaths)
+    return active.filter(t => t.filesModified?.some(f => pathSet.has(f)))
+  }
+
+  /** Recent completion records for CriticalityEngine */
+  getRecentCompletionRecords(limit = 50): Array<{
+    agentRole: string; taskType: string | null
+    estimatedMs: number | null; actualMs: number | null
+    reviewScore: number | null; completedAt: string
+  }> {
+    const rows = this.db.prepare(`
+      SELECT agent_role   AS agentRole,
+             task_type    AS taskType,
+             estimated_ms AS estimatedMs,
+             actual_ms    AS actualMs,
+             review_score AS reviewScore,
+             completed_at AS completedAt
+      FROM task_completion_records ORDER BY completed_at DESC LIMIT ?
+    `).all(limit) as unknown as Array<{
+      agentRole: string; taskType: string | null
+      estimatedMs: number | null; actualMs: number | null
+      reviewScore: number | null; completedAt: string
+    }>
+    return rows
+  }
+
+  /** Log a completion record (called from completeTaskTool) */
+  logCompletion(params: {
+    taskId: string; agentRole: string; taskType: string | null
+    estimatedMs: number | null; actualMs: number | null
+  }): void {
+    this.db.prepare(`
+      INSERT INTO task_completion_records (task_id, agent_role, task_type, estimated_ms, actual_ms)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(params.taskId, params.agentRole, params.taskType, params.estimatedMs, params.actualMs)
+  }
+
+  /** Update review_score on a completion record after QA */
+  updateCompletionScore(taskId: string, score: number): void {
+    this.db.prepare(`
+      UPDATE task_completion_records SET review_score = ? WHERE task_id = ?
+    `).run(score, taskId)
+  }
+
+  /** Recent reviews for FEP quality_trend probe */
+  getRecentReviews(limit = 10): Array<{ approved: boolean }> {
+    const rows = this.db.prepare(`
+      SELECT qa_phase2_verdict FROM tasks
+      WHERE qa_phase2_verdict IS NOT NULL
+      ORDER BY last_updated DESC LIMIT ?
+    `).all(limit) as unknown as Array<{ qa_phase2_verdict: string }>
+    return rows.map(r => {
+      const v = JSON.parse(r.qa_phase2_verdict) as { verdict: string }
+      return { approved: v.verdict === 'approved' }
+    })
+  }
+
+  /** Count of tasks currently in 'blocked' status (FEP critical_path_health probe). */
+  getBlockingTaskCount(): number {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM tasks WHERE status = 'blocked'"
+    ).get() as { n: number }
+    return row.n
+  }
+
+  /** In-progress tasks for FEP context_budget probe */
+  getInProgressByAgent(agentId: string): TaskRecord[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM tasks WHERE status = 'in_progress' AND assigned_to = ?
+    `).all(agentId) as unknown as TaskRow[]
+    return rows.map(r => this.rowToRecord(r))
+  }
+
+  // ── Gap 1: dependency management ─────────────────────────────────────────
+
+  /**
+   * Add a dependency after task creation.
+   * Validates: both tasks exist, no self-reference, no cycle.
+   * Error codes: TASK_NOT_FOUND, SELF_REFERENCE, WOULD_CREATE_CYCLE, ALREADY_EXISTS
+   */
+  addDependency(taskId: string, dependsOnId: string): { ok: true } | { ok: false; code: string; reason: string } {
+    if (taskId === dependsOnId) {
+      return { ok: false, code: 'SELF_REFERENCE', reason: 'A task cannot depend on itself' }
+    }
+    const task = this.db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId) as { id: string } | undefined
+    if (!task) return { ok: false, code: 'TASK_NOT_FOUND', reason: `Task not found: ${taskId}` }
+    const dep = this.db.prepare('SELECT id FROM tasks WHERE id = ?').get(dependsOnId) as { id: string } | undefined
+    if (!dep) return { ok: false, code: 'TASK_NOT_FOUND', reason: `Dependency task not found: ${dependsOnId}` }
+
+    // Check if already exists
+    const existing = this.db.prepare(
+      'SELECT 1 FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?'
+    ).get(taskId, dependsOnId)
+    if (existing) return { ok: false, code: 'ALREADY_EXISTS', reason: 'Dependency already exists' }
+
+    if (this.wouldCreateCycle(taskId, dependsOnId)) {
+      return { ok: false, code: 'WOULD_CREATE_CYCLE', reason: 'Adding this dependency would create a cycle' }
+    }
+
+    this.db.prepare('INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)').run(taskId, dependsOnId)
+    return { ok: true }
+  }
+
+  /**
+   * Check if adding edge taskId→newDepId would create a cycle.
+   * Uses BFS forward from newDepId — if we can reach taskId from newDepId,
+   * the new edge would close a cycle.
+   */
+  wouldCreateCycle(taskId: string, newDepId: string): boolean {
+    // BFS: start from newDepId, follow "task_id depends_on depends_on_id"
+    // i.e., forward = "what tasks does newDepId depend on (transitively)"
+    // If we reach taskId, adding taskId→newDepId creates a cycle
+    const visited = new Set<string>()
+    const queue = [newDepId]
+    while (queue.length > 0) {
+      const current = queue.shift()!
+      if (current === taskId) return true
+      if (visited.has(current)) continue
+      visited.add(current)
+      const deps = this.db.prepare(
+        'SELECT depends_on_id FROM task_dependencies WHERE task_id = ?'
+      ).all(current) as Array<{ depends_on_id: string }>
+      for (const d of deps) queue.push(d.depends_on_id)
+    }
+    return false
+  }
+
+  /**
+   * CPM: count blocked tasks on the critical path (Float = 0).
+   * Falls back to getBlockingTaskCount() if there are no estimated_ms.
+   *
+   * Algorithm:
+   * 1. Get all active (pending + in_progress + blocked) tasks with estimates
+   * 2. Topological sort via Kahn's on task_dependencies
+   * 3. Compute ES/EF (forward pass), LS/LF (backward pass)
+   * 4. Float = LS - ES; Float=0 → on critical path
+   * 5. Return count of 'blocked' tasks where Float=0
+   */
+  getCriticalPathBlockedCount(): number {
+    const activeStatuses = ['pending', 'assigned', 'in_progress', 'blocked']
+    const rows = this.db.prepare(`
+      SELECT id, status, estimated_ms FROM tasks WHERE status IN (${activeStatuses.map(() => '?').join(',')})
+    `).all(...activeStatuses) as Array<{ id: string; status: string; estimated_ms: number | null }>
+
+    if (rows.length === 0) return 0
+
+    const taskIds = new Set(rows.map(r => r.id))
+    const deps = this.db.prepare(`
+      SELECT task_id, depends_on_id FROM task_dependencies
+      WHERE task_id IN (${rows.map(() => '?').join(',')})
+        AND depends_on_id IN (${rows.map(() => '?').join(',')})
+    `).all(...rows.map(r => r.id), ...rows.map(r => r.id)) as Array<{ task_id: string; depends_on_id: string }>
+
+    // Estimate in minutes (fallback: average of known estimates, or 60 min)
+    const knownEstimates = rows.filter(r => r.estimated_ms != null).map(r => r.estimated_ms! / 60_000)
+    const avgEstimate = knownEstimates.length > 0
+      ? knownEstimates.reduce((a, b) => a + b, 0) / knownEstimates.length
+      : 60
+
+    const duration = (id: string): number => {
+      const r = rows.find(t => t.id === id)
+      return r?.estimated_ms != null ? r.estimated_ms / 60_000 : avgEstimate
+    }
+
+    // Build adjacency (predecessors and successors)
+    const successors = new Map<string, string[]>()
+    const inDegree   = new Map<string, number>()
+    for (const r of rows) { successors.set(r.id, []); inDegree.set(r.id, 0) }
+    for (const d of deps) {
+      successors.get(d.depends_on_id)!.push(d.task_id)
+      inDegree.set(d.task_id, (inDegree.get(d.task_id) ?? 0) + 1)
+    }
+
+    // Kahn's topological sort
+    const topo: string[] = []
+    const queue = [...rows.filter(r => (inDegree.get(r.id) ?? 0) === 0).map(r => r.id)]
+    while (queue.length > 0) {
+      const node = queue.shift()!
+      topo.push(node)
+      for (const succ of successors.get(node) ?? []) {
+        const deg = (inDegree.get(succ) ?? 1) - 1
+        inDegree.set(succ, deg)
+        if (deg === 0) queue.push(succ)
+      }
+    }
+
+    // If cycle detected (shouldn't happen with our cycle check), fall back
+    if (topo.length < rows.length) return this.getBlockingTaskCount()
+
+    // Forward pass: ES, EF
+    const ES = new Map<string, number>()
+    const EF = new Map<string, number>()
+    for (const id of topo) {
+      const predecessors = deps.filter(d => d.task_id === id).map(d => d.depends_on_id)
+      const es = predecessors.length > 0
+        ? Math.max(...predecessors.map(p => EF.get(p) ?? 0))
+        : 0
+      ES.set(id, es)
+      EF.set(id, es + duration(id))
+    }
+
+    const projectDuration = Math.max(...[...EF.values()])
+
+    // Backward pass: LF, LS
+    const LF = new Map<string, number>()
+    const LS = new Map<string, number>()
+    for (const id of [...topo].reverse()) {
+      const succs = successors.get(id) ?? []
+      const lf = succs.length > 0
+        ? Math.min(...succs.map(s => LS.get(s) ?? projectDuration))
+        : projectDuration
+      LF.set(id, lf)
+      LS.set(id, lf - duration(id))
+    }
+
+    // Count blocked tasks on critical path (Float = LS - ES ≈ 0)
+    let count = 0
+    for (const r of rows) {
+      if (r.status === 'blocked') {
+        const float = (LS.get(r.id) ?? 0) - (ES.get(r.id) ?? 0)
+        if (Math.abs(float) < 0.001) count++
+      }
+    }
+    return count
+  }
+
+  // ── CPM ──────────────────────────────────────────────────────────────────────
+
+  computeCPM(): void {
+    // 1. Cargar tareas activas (no completadas/canceladas)
+    const activeTasks = this.db.prepare(`
+      SELECT id, estimated_duration FROM tasks
+      WHERE status NOT IN ('completed', 'cancelled', 'failed')
+    `).all() as Array<{ id: string; estimated_duration: number }>
+
+    if (activeTasks.length === 0) return
+
+    const taskIds = new Set(activeTasks.map(t => t.id))
+    const duration = new Map(activeTasks.map(t => [t.id, t.estimated_duration]))
+
+    // 2. Dependencias entre tareas activas únicamente
+    const allDeps = this.db.prepare(`
+      SELECT td.task_id, td.depends_on_id
+      FROM task_dependencies td
+      JOIN tasks dep ON td.depends_on_id = dep.id
+      WHERE dep.status NOT IN ('completed', 'cancelled', 'failed')
+        AND td.task_id IN (
+          SELECT id FROM tasks WHERE status NOT IN ('completed', 'cancelled', 'failed')
+        )
+    `).all() as Array<{ task_id: string; depends_on_id: string }>
+
+    // 3. Construir grafo
+    const predecessors = new Map<string, string[]>()
+    const successors = new Map<string, string[]>()
+    for (const t of activeTasks) {
+      predecessors.set(t.id, [])
+      successors.set(t.id, [])
+    }
+    for (const dep of allDeps) {
+      if (taskIds.has(dep.depends_on_id)) {
+        predecessors.get(dep.task_id)!.push(dep.depends_on_id)
+        successors.get(dep.depends_on_id)!.push(dep.task_id)
+      }
+    }
+
+    // 4. Topological sort (Kahn's algorithm)
+    const inDegree = new Map(activeTasks.map(t => [t.id, predecessors.get(t.id)!.length]))
+    const queue = activeTasks.filter(t => inDegree.get(t.id) === 0).map(t => t.id)
+    const topoOrder: string[] = []
+    while (queue.length > 0) {
+      const curr = queue.shift()!
+      topoOrder.push(curr)
+      for (const succ of successors.get(curr)!) {
+        const deg = inDegree.get(succ)! - 1
+        inDegree.set(succ, deg)
+        if (deg === 0) queue.push(succ)
+      }
+    }
+
+    // 5. Forward pass (Early Start / Early Finish)
+    const ES = new Map<string, number>()
+    const EF = new Map<string, number>()
+    for (const id of topoOrder) {
+      const preds = predecessors.get(id)!
+      const es = preds.length === 0 ? 0 : Math.max(...preds.map(p => EF.get(p)!))
+      ES.set(id, es)
+      EF.set(id, es + duration.get(id)!)
+    }
+
+    // 6. Backward pass (Late Start / Late Finish)
+    const projectEnd = Math.max(...[...EF.values()])
+    const LS = new Map<string, number>()
+    const LF = new Map<string, number>()
+    for (const id of [...topoOrder].reverse()) {
+      const succs = successors.get(id)!
+      const lf = succs.length === 0 ? projectEnd : Math.min(...succs.map(s => LS.get(s)!))
+      LF.set(id, lf)
+      LS.set(id, lf - duration.get(id)!)
+    }
+
+    // 7. Calcular float y critical path, actualizar DB
+    this.db.transaction(() => {
+      for (const id of topoOrder) {
+        const float = LS.get(id)! - ES.get(id)!
+        const isCritical = float <= 0 ? 1 : 0
+        this.db.prepare(
+          'UPDATE tasks SET float_minutes = ?, is_critical_path = ? WHERE id = ?'
+        ).run(float, isCritical, id)
+      }
+    })
+  }
+
+  // ── Private ──────────────────────────────────────────────────────────────────
+
   private rowToRecord(row: TaskRow): TaskRecord {
     return {
       id: row.id,
@@ -403,6 +817,13 @@ export class TaskStore {
       lastUpdated: row.last_updated,
       context: row.context ? JSON.parse(row.context) as Record<string, unknown> : null,
       dependsOn: this.getDependencies(row.id),
+      taskType: row.task_type ?? null,
+      decayScore: row.decay_score ?? 0.5,
+      qualityFloor: row.quality_floor ?? 0.0,
+      estimatedMs: row.estimated_ms ?? null,
+      estimatedDuration: row.estimated_duration ?? 60,
+      floatMinutes: row.float_minutes ?? null,
+      isCriticalPath: row.is_critical_path === 1,
     }
   }
 }

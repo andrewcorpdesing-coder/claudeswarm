@@ -17,6 +17,11 @@ const CreateTaskShape = {
   milestone_id: z.string().optional(),
   acceptance_criteria: z.string().optional(),
   context: z.record(z.unknown()).optional().describe('Additional context the agent will need'),
+  task_type: z.enum(['feature','bugfix','refactor','architecture','test','documentation','devops','research'])
+    .optional().describe('Type of work — drives priority decay and quality routing'),
+  estimated_ms: z.number().int().positive().optional().describe('Estimated duration in milliseconds'),
+  estimated_duration_minutes: z.number().int().min(1).optional()
+    .describe('Estimated duration in minutes (default: 60). Used for CPM critical path calculation.'),
 }
 
 type CreateTaskParams = {
@@ -30,6 +35,9 @@ type CreateTaskParams = {
   milestone_id?: string
   acceptance_criteria?: string
   context?: Record<string, unknown>
+  task_type?: string
+  estimated_ms?: number
+  estimated_duration_minutes?: number
 }
 
 export function registerCreateTaskTool(
@@ -71,6 +79,9 @@ export function registerCreateTaskTool(
           acceptanceCriteria: params.acceptance_criteria,
           dependsOn: params.depends_on,
           context: params.context,
+          taskType: params.task_type,
+          estimatedMs: params.estimated_ms,
+          estimatedDuration: params.estimated_duration_minutes,
         })
 
         // Notify the directly assigned agent

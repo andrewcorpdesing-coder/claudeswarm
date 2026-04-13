@@ -34,7 +34,9 @@ export async function runExec(
 ): Promise<void> {
   const config = loadConfig(cwd)
   const autoStart = ' "."'  // always auto-start all agents
-  const skipPerms = opts.yolo ? ' --dangerously-skip-permissions' : ''
+  // --launch always adds --dangerously-skip-permissions so agents run without prompts.
+  // Pass --no-yolo explicitly if you want to keep permission prompts.
+  const skipPerms = (opts.launch || opts.yolo) ? ' --dangerously-skip-permissions' : ''
 
   // Build list of { role, model } to show
   let targets: Array<{ role: string; model: string }>
@@ -140,8 +142,14 @@ function tryLaunchAll(
 
 /**
  * Windows Terminal: builds a single `wt` compound command with split panes.
- *   wt -d <dir1> --title <role1> cmd /k <cmd1> ; split-pane -H -d <dir2> --title <role2> cmd /k <cmd2> ...
- * All agents share one WT window, each in its own horizontal pane.
+ *
+ * Layout by agent count:
+ *   N=1  — single pane
+ *   N=2  — side by side (split-pane -V)
+ *   N=3  — orchestrator left (full height) | right column split top/bottom
+ *             [agent 0] | [agent 1]
+ *                       | [agent 2]
+ *   N≥4  — horizontal stacks (split-pane -H for each)
  */
 function launchWindowsTerminal(
   targets: Array<{ role: string; model: string }>,
@@ -149,22 +157,45 @@ function launchWindowsTerminal(
   skipPerms: string,
   autoStart: string,
 ): boolean {
-  const wtArgs: string[] = []
-  for (let i = 0; i < targets.length; i++) {
-    const { role, model } = targets[i]
+  const cmd = (role: string, model: string) => {
     const agentDir = resolve(cwd, 'agents', role)
-    const claudeCmd = `claude --model ${model}${skipPerms}${autoStart}`
-    if (i > 0) wtArgs.push(';', 'split-pane', '-H')
-    wtArgs.push('-d', agentDir, '--title', role, 'cmd', '/k', claudeCmd)
+    return { agentDir, claudeCmd: `claude --model ${model}${skipPerms}${autoStart}` }
   }
+
+  const wtArgs: string[] = []
+
+  if (targets.length === 3) {
+    // [0] left full-height, [1] top-right, [2] bottom-right
+    const [t0, t1, t2] = targets
+    const c0 = cmd(t0.role, t0.model)
+    const c1 = cmd(t1.role, t1.model)
+    const c2 = cmd(t2.role, t2.model)
+    wtArgs.push('-d', c0.agentDir, '--title', t0.role, 'cmd', '/k', c0.claudeCmd)
+    wtArgs.push(';', 'split-pane', '-V', '-d', c1.agentDir, '--title', t1.role, 'cmd', '/k', c1.claudeCmd)
+    wtArgs.push(';', 'split-pane', '-H', '-d', c2.agentDir, '--title', t2.role, 'cmd', '/k', c2.claudeCmd)
+  } else if (targets.length === 2) {
+    const [t0, t1] = targets
+    const c0 = cmd(t0.role, t0.model)
+    const c1 = cmd(t1.role, t1.model)
+    wtArgs.push('-d', c0.agentDir, '--title', t0.role, 'cmd', '/k', c0.claudeCmd)
+    wtArgs.push(';', 'split-pane', '-V', '-d', c1.agentDir, '--title', t1.role, 'cmd', '/k', c1.claudeCmd)
+  } else {
+    // N=1 or N≥4: stack horizontally
+    for (let i = 0; i < targets.length; i++) {
+      const { role, model } = targets[i]
+      const { agentDir, claudeCmd } = cmd(role, model)
+      if (i > 0) wtArgs.push(';', 'split-pane', '-H')
+      wtArgs.push('-d', agentDir, '--title', role, 'cmd', '/k', claudeCmd)
+    }
+  }
+
   try {
     spawn('wt', wtArgs, { detached: true, stdio: 'ignore' }).unref()
     return true
   } catch {
     // wt not available — fall back to separate cmd windows
     for (const { role, model } of targets) {
-      const agentDir = resolve(cwd, 'agents', role)
-      const claudeCmd = `claude --model ${model}${skipPerms}${autoStart}`
+      const { agentDir, claudeCmd } = cmd(role, model)
       spawn('cmd', ['/c', 'start', 'cmd', '/k', `cd /d "${agentDir}" && ${claudeCmd}`], {
         detached: true, stdio: 'ignore',
       }).unref()
